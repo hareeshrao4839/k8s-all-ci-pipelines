@@ -173,8 +173,11 @@ func SetResponseBodyString(c *gin.Context, statusCode int, format string) {
 const (
 	BootstrapScriptMasterKey     = "BOOTSTRAP_SCRIPT_MASTER"
 	BootstrapScriptNodeKey       = "BOOTSTRAP_SCRIPT_NODE"
-	BootstrapScriptMasterDefault = "https://raw.githubusercontent.com/banzaicloud/banzai-charts/master/stable/pipeline/bootstrap/amazon_k8s_ubuntu_16.04_master_pipeline.sh"
-	BootstrapScriptNodeDefault   = "https://raw.githubusercontent.com/banzaicloud/banzai-charts/master/stable/pipeline/bootstrap/amazon_k8s_ubuntu_16.04_node_pipeline.sh"
+	//BootstrapScriptMasterDefault = "https://raw.githubusercontent.com/banzaicloud/banzai-charts/master/stable/pipeline/bootstrap/amazon_k8s_ubuntu_16.04_master_pipeline.sh"
+	//BootstrapScriptNodeDefault   = "https://raw.githubusercontent.com/banzaicloud/banzai-charts/master/stable/pipeline/bootstrap/amazon_k8s_ubuntu_16.04_node_pipeline.sh"
+	BootstrapScriptMasterDefault = "https://raw.githubusercontent.com/banzaicloud/banzai-charts/master-enable_device_plugin/stable/pipeline/bootstrap/amazon_k8s_ubuntu_16.04_master_pipeline.sh"
+	BootstrapScriptNodeDefault   = "https://raw.githubusercontent.com/banzaicloud/banzai-charts/master-enable_device_plugin/stable/pipeline/bootstrap/amazon_k8s_ubuntu_16.04_node_pipeline.sh"
+
 )
 
 func getBootstrapScriptFromEnv(isMaster bool) string {

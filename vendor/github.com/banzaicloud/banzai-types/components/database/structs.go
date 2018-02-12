@@ -27,6 +27,9 @@ type AmazonClusterSimple struct {
 	NodeImage          string
 	MasterInstanceType string
 	MasterImage        string
+	FileSystemId 			 string
+	PvcName  					 string
+	DeleteWithCluster  bool
 }
 
 type AzureClusterSimple struct {

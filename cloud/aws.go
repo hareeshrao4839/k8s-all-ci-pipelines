@@ -20,6 +20,9 @@ import (
 	"golang.org/x/crypto/ssh"
 	"github.com/pkg/sftp"
 	"strings"
+	"github.com/aws/aws-sdk-go/service/efs"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
 )
 
 // GetAWSCluster creates *cluster.Cluster from ClusterSimple struct
@@ -82,6 +85,7 @@ func GetAWSCluster(cs *banzaiSimpleTypes.ClusterSimple) *cluster.Cluster {
                            "ecr:BatchGetImage",
                            "autoscaling:DescribeAutoScalingGroups",
                            "autoscaling:UpdateAutoScalingGroup",
+ 													 "elasticfilesystem:DescribeFileSystems",
 													 "s3:ListBucket",
 													 "s3:GetObject",
 													 "s3:PutObject",
@@ -118,6 +122,12 @@ func GetAWSCluster(cs *banzaiSimpleTypes.ClusterSimple) *cluster.Cluster {
 								IngressFromPort: "443",
 								IngressToPort:   "443",
 								IngressSource:   "0.0.0.0/0",
+								IngressProtocol: "tcp",
+							},
+							{
+								IngressFromPort: "2049",
+								IngressToPort:   "2049",
+								IngressSource:   "10.0.100.0/24",
 								IngressProtocol: "tcp",
 							},
 							{
@@ -164,6 +174,7 @@ func GetAWSCluster(cs *banzaiSimpleTypes.ClusterSimple) *cluster.Cluster {
             							"ecr:DescribeRepositories",
             							"ecr:ListImages",
             							"ecr:BatchGetImage",
+ 													"elasticfilesystem:DescribeFileSystems",
 													"s3:ListBucket",
 													"s3:GetObject",
 													"s3:PutObject",
@@ -193,6 +204,12 @@ func GetAWSCluster(cs *banzaiSimpleTypes.ClusterSimple) *cluster.Cluster {
 								IngressFromPort: "22",
 								IngressToPort:   "22",
 								IngressSource:   "0.0.0.0/0",
+								IngressProtocol: "tcp",
+							},
+							{
+								IngressFromPort: "2049",
+								IngressToPort:   "2049",
+								IngressSource:   "10.0.100.0/24",
 								IngressProtocol: "tcp",
 							},
 							{
@@ -324,6 +341,9 @@ func CreateClusterAmazon(request *banzaiTypes.CreateClusterRequest, c *gin.Conte
 			NodeImage:          request.Properties.CreateClusterAmazon.Node.Image,
 			MasterInstanceType: request.Properties.CreateClusterAmazon.Master.InstanceType,
 			MasterImage:        request.Properties.CreateClusterAmazon.Master.Image,
+			FileSystemId: 			request.Properties.CreateClusterAmazon.Efs.FileSystemId,
+			PvcName:  					request.Properties.CreateClusterAmazon.Efs.PvcName,
+			DeleteWithCluster:	request.Properties.CreateClusterAmazon.Efs.DeleteWithCluster,
 		},
 	}
 
@@ -624,4 +644,120 @@ func GetAmazonK8SConfig(cl *banzaiSimpleTypes.ClusterSimple, c *gin.Context) {
 		banzaiUtils.LogDebug(banzaiConstants.TagFetchClusterConfig, "Content-Type: ", ctype)
 		SetResponseBodyString(c, http.StatusOK, string(data))
 	}
+}
+
+func EnsureEFSCreatedAndBounded(fileSystemId *string, cluster *banzaiSimpleTypes.ClusterSimple) *string {
+	sess, err := session.NewSession()
+	if err != nil {
+		banzaiUtils.LogInfof(banzaiConstants.TagStatus, "couldn't create an AWS session: %v", err)
+		return nil
+	}
+
+	svc := efs.New(sess, &aws.Config{Region: aws.String(cluster.Location)})
+	fileSystemId = getOrCreateEFSFileSystem(svc, fileSystemId)
+	if fileSystemId != nil {
+		createMountTargets(svc, *fileSystemId, cluster)
+	}
+	return fileSystemId
+}
+
+func getOrCreateEFSFileSystem(svc *efs.EFS, fileSystemId *string) *string {
+	var id *string
+	if fileSystemId == nil {
+		uuid := uuid.TimeOrderedUUID()
+		fileSystemInput := &efs.CreateFileSystemInput{}
+		fileSystemInput.SetCreationToken(uuid)
+		fileSystemInput.SetPerformanceMode("generalPurpose")
+		fileSystemDesc, error := svc.CreateFileSystem(fileSystemInput)
+		if error != nil {
+			banzaiUtils.LogErrorf(banzaiConstants.TagStatus, "Error creating FileSystem", error)
+			return nil
+		}
+		id = fileSystemDesc.FileSystemId
+		state := fileSystemDesc.LifeCycleState
+		banzaiUtils.LogInfof(banzaiConstants.TagStatus, "FileSystem %v created, state = %v", *fileSystemId, *state)
+	} else {
+		fileSystemInput := &efs.DescribeFileSystemsInput{}
+		fileSystemInput.SetFileSystemId(*fileSystemId)
+		fileSystemsDesc, error := svc.DescribeFileSystems(fileSystemInput)
+		if len(fileSystemsDesc.FileSystems) != 1 {
+			return nil
+		}
+		fileSystemDesc := fileSystemsDesc.FileSystems[0]
+		id = fileSystemDesc.FileSystemId
+		state := fileSystemDesc.LifeCycleState
+		if error != nil {
+			banzaiUtils.LogErrorf(banzaiConstants.TagStatus, "Error describing FileSystem", error)
+			return nil
+		}
+		banzaiUtils.LogInfof(banzaiConstants.TagStatus, "FileSystem %v state = %v", *fileSystemId, *state)
+	}
+	return id
+}
+
+func createMountTargets(svc *efs.EFS, fileSystemId string, cluster *banzaiSimpleTypes.ClusterSimple) (*string, error) {
+
+	amazonCluster, err := GetKubicornCluster(cluster)
+	if err != nil {
+		banzaiUtils.LogWarnf(banzaiConstants.TagGetCluster, "Error read cluster: %s", err)
+		return nil, err
+	}
+	banzaiUtils.LogInfof(banzaiConstants.TagStatus, "Amazon cluster name: ", amazonCluster.Name)
+
+	// get subnetId & securityGroupId
+	var subnetId, securityGroupId string
+	if len(amazonCluster.ServerPools) > 0 {
+		serverPool := amazonCluster.ServerPools[0]
+		if len(serverPool.Subnets) > 0 {
+			subNet := serverPool.Subnets[0]
+			subnetId = subNet.Identifier
+		}
+		if len(serverPool.Firewalls) > 0 {
+			firewall := serverPool.Firewalls[0]
+			securityGroupId = firewall.Identifier
+		}
+	}
+
+	banzaiUtils.LogInfof(banzaiConstants.TagStatus, "Found SubnetId %v / SecurityGroupId %v", subnetId, securityGroupId)
+
+	mountTargetId, error := retriveMountTarget(svc, subnetId, fileSystemId)
+	if error != nil {
+		return nil, error
+	}
+	if mountTargetId != nil {
+		return mountTargetId, nil
+	}
+
+	createMountTargetInput := efs.CreateMountTargetInput{}
+	createMountTargetInput.SetFileSystemId(fileSystemId)
+	createMountTargetInput.SetSubnetId(subnetId)
+	createMountTargetInput.SetSecurityGroups([]*string{&securityGroupId})
+	createMountTargetOutput, error := svc.CreateMountTarget(&createMountTargetInput)
+	if error != nil {
+		banzaiUtils.LogErrorf(banzaiConstants.TagStatus, "Error creating mount target: %s", error)
+		return nil, error
+	}
+	banzaiUtils.LogInfof(banzaiConstants.TagStatus, "Mount target %s created, state: %s",
+		*createMountTargetOutput.MountTargetId, *createMountTargetOutput.LifeCycleState)
+	return createMountTargetOutput.MountTargetId, nil
+}
+
+func retriveMountTarget(svc *efs.EFS, subnetId string, fileSystemId string) (*string, error) {
+	if len(subnetId) > 0 {
+		getMountTargetsInput := efs.DescribeMountTargetsInput{}
+		getMountTargetsInput.SetFileSystemId(fileSystemId)
+		getMountTargetsOutput, error := svc.DescribeMountTargets(&getMountTargetsInput)
+		if error != nil {
+			banzaiUtils.LogErrorf(banzaiConstants.TagStatus, "Error retrieving mount target: %s", error)
+			return nil, error
+		}
+		for _, mountTarget := range getMountTargetsOutput.MountTargets {
+			if *mountTarget.SubnetId == subnetId {
+				banzaiUtils.LogInfof(banzaiConstants.TagStatus, "Mount target %v for subnet %v already exists, state: %v",
+					*mountTarget.MountTargetId, subnetId, *mountTarget.LifeCycleState)
+				return mountTarget.MountTargetId, nil
+			}
+		}
+	}
+	return nil, nil
 }

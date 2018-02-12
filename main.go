@@ -507,6 +507,7 @@ func CreateCluster(c *gin.Context) {
 				postHookFunctions = append(postHookFunctions, updatePrometheusPostHook)
 				postHookFunctions = append(postHookFunctions, installHelmPostHook)
 				postHookFunctions = append(postHookFunctions, installIngressControllerPostHook)
+				postHookFunctions = append(postHookFunctions, provisionEfsPostHook)
 			}
 		} else {
 			// not valid request
@@ -721,6 +722,38 @@ func installHelmPostHook(createdCluster *banzaiSimpleTypes.ClusterSimple, c *gin
 		}
 		banzaiUtils.LogError(logTag, "Timeout during waiting for tiller to get ready")
 	}
+}
+
+func provisionEfsPostHook(createdCluster *banzaiSimpleTypes.ClusterSimple, c *gin.Context) {
+	// --- [ Get K8S Config ] --- //
+
+	efsFileSystemId := cloud.EnsureEFSCreatedAndBounded(&createdCluster.Amazon.FileSystemId, createdCluster)
+	if createdCluster.Amazon.FileSystemId != *efsFileSystemId {
+		createdCluster.Amazon.FileSystemId = *efsFileSystemId
+		//TODO save createdCluster to db
+	}
+
+	// install efs-provisioner
+	//kubeConfig, err := cloud.GetK8SConfig(createdCluster, c)
+	//if err != nil {
+	//	return
+	//}
+	//
+	//logTag := "efs-provisioner"
+	//banzaiUtils.LogInfo(logTag, "Getting K8S Config Succeeded")
+	//
+	//deploymentName := "banzaicloud-stable/efs-provisioner"
+	//releaseName := "pipeline"
+	//
+	//yamlValues, err := yaml.Marshal("")
+	//
+	//_, err = helm.CreateDeployment(deploymentName, releaseName, yamlValues, kubeConfig, createdCluster.Name)
+	//if err != nil {
+	//	banzaiUtils.LogErrorf(logTag, "Deploying '%s' failed due to: ", deploymentName)
+	//	banzaiUtils.LogErrorf(logTag, "%s", err.Error())
+	//	return
+	//}
+	//banzaiUtils.LogInfof(logTag, "'%s' installed", deploymentName)
 }
 
 func updatePrometheus() {
@@ -1051,6 +1084,9 @@ func Status(c *gin.Context) {
 	} else {
 		var clusterStatuses []pods.ClusterStatusResponse
 		for _, cl := range clusters {
+
+			//efsFileSystemId = cloud.EnsureEFSCreatedAndBounded(&EXISTING_EFS_ID, &cl)
+
 			banzaiUtils.LogInfo(utils.TagStatus, "Start listing pods / cluster")
 			var clusterStatusResponse pods.ClusterStatusResponse
 			clusterStatusResponse, err := pods.ListPodsForCluster(&cl)

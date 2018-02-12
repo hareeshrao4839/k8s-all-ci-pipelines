@@ -9,6 +9,7 @@ import (
 type CreateClusterAmazon struct {
 	Node   *CreateAmazonNode   `json:"node,omitempty"`
 	Master *CreateAmazonMaster `json:"master,omitempty"`
+	Efs    *CreateAmazonEfs    `json:"efs,omitempty"`
 }
 
 type CreateAmazonMaster struct {
@@ -21,6 +22,12 @@ type CreateAmazonNode struct {
 	MinCount  int    `json:"minCount"`
 	MaxCount  int    `json:"maxCount"`
 	Image     string `json:"image"`
+}
+
+type CreateAmazonEfs struct {
+	FileSystemId 			string `json:"fileSystemId"`
+	PvcName  					string `json:"pvcName"`
+	DeleteWithCluster bool 	 `json:"deleteWithCluster"`
 }
 
 type UpdateClusterAmazon struct {
