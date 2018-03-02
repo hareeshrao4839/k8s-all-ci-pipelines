@@ -629,6 +629,7 @@ func DeleteCluster(c *gin.Context) {
 		} else {
 			banzaiUtils.LogInfo(banzaiConstants.TagDeleteCluster, "Deployments successfully deleted")
 		}
+		//cloud.EnsureEFSMountTargetsAreDeleted()
 	}
 	if cloud.DeleteCluster(cl, c) {
 		// cluster delete success
@@ -726,35 +727,48 @@ func installHelmPostHook(createdCluster *banzaiSimpleTypes.ClusterSimple, c *gin
 
 func provisionEfsPostHook(createdCluster *banzaiSimpleTypes.ClusterSimple, c *gin.Context) {
 	// --- [ Get K8S Config ] --- //
-
 	efsFileSystemId := cloud.EnsureEFSCreatedAndBounded(&createdCluster.Amazon.FileSystemId, createdCluster)
-	if createdCluster.Amazon.FileSystemId != *efsFileSystemId {
+	if efsFileSystemId == nil {
+		return
+	}
+
+	if len(createdCluster.Amazon.FileSystemId) == 0  {
 		createdCluster.Amazon.FileSystemId = *efsFileSystemId
-		//TODO save createdCluster to db
+		// save db
+		if err := database.Save(&createdCluster).Error; err != nil {
+			banzaiUtils.LogError(banzaiConstants.TagStatus, "Error saving cluster FileSystemId to db: %v", err)
+			return
+		}
 	}
 
 	// install efs-provisioner
-	//kubeConfig, err := cloud.GetK8SConfig(createdCluster, c)
-	//if err != nil {
-	//	return
-	//}
-	//
-	//logTag := "efs-provisioner"
-	//banzaiUtils.LogInfo(logTag, "Getting K8S Config Succeeded")
-	//
-	//deploymentName := "banzaicloud-stable/efs-provisioner"
-	//releaseName := "pipeline"
-	//
-	//yamlValues, err := yaml.Marshal("")
-	//
-	//_, err = helm.CreateDeployment(deploymentName, releaseName, yamlValues, kubeConfig, createdCluster.Name)
-	//if err != nil {
-	//	banzaiUtils.LogErrorf(logTag, "Deploying '%s' failed due to: ", deploymentName)
-	//	banzaiUtils.LogErrorf(logTag, "%s", err.Error())
-	//	return
-	//}
-	//banzaiUtils.LogInfof(logTag, "'%s' installed", deploymentName)
+	installEfsProvisionerChart(createdCluster, c)
 }
+
+func installEfsProvisionerChart(createdCluster *banzaiSimpleTypes.ClusterSimple, c *gin.Context) {
+	kubeConfig, err := cloud.GetK8SConfig(createdCluster, c)
+	if err != nil {
+		return
+	}
+
+	logTag := "efs-provisioner"
+	banzaiUtils.LogInfo(logTag, "Getting K8S Config Succeeded")
+
+	deploymentName := "banzaicloud-stable/efs-provisioner"
+	values := map[string] map[string]string {"efs": {"awsRegion": createdCluster.Location,
+	"fileSystemId": createdCluster.Amazon.FileSystemId}}
+
+	yamlValues, err := yaml.Marshal(values)
+
+	_, err = helm.CreateDeployment(deploymentName, "", yamlValues, kubeConfig, createdCluster.Name)
+	if err != nil {
+		banzaiUtils.LogErrorf(logTag, "Deploying '%s' failed due to: ", deploymentName)
+		banzaiUtils.LogErrorf(logTag, "%s", err.Error())
+		return
+	}
+	banzaiUtils.LogInfof(logTag, "'%s' installed", deploymentName)
+}
+
 
 func updatePrometheus() {
 	err := monitor.UpdatePrometheusConfig()
@@ -1085,7 +1099,8 @@ func Status(c *gin.Context) {
 		var clusterStatuses []pods.ClusterStatusResponse
 		for _, cl := range clusters {
 
-			//efsFileSystemId = cloud.EnsureEFSCreatedAndBounded(&EXISTING_EFS_ID, &cl)
+			//cl.Amazon.FileSystemId = "fs-7754d7be"
+			//provisionEfsPostHook(&cl, c)
 
 			banzaiUtils.LogInfo(utils.TagStatus, "Start listing pods / cluster")
 			var clusterStatusResponse pods.ClusterStatusResponse

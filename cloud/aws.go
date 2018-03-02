@@ -23,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/efs"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"time"
 )
 
 // GetAWSCluster creates *cluster.Cluster from ClusterSimple struct
@@ -661,13 +662,25 @@ func EnsureEFSCreatedAndBounded(fileSystemId *string, cluster *banzaiSimpleTypes
 	return fileSystemId
 }
 
+func EnsureEFSMountTargetsAreDeleted(fileSystemId string, cluster *banzaiSimpleTypes.ClusterSimple) error {
+	sess, err := session.NewSession()
+	if err != nil {
+		banzaiUtils.LogInfof(banzaiConstants.TagStatus, "couldn't create an AWS session: %v", err)
+		return nil
+	}
+
+	svc := efs.New(sess, &aws.Config{Region: aws.String(cluster.Location)})
+	deleteMountTargets(svc, fileSystemId, cluster)
+	return nil
+}
+
 func getOrCreateEFSFileSystem(svc *efs.EFS, fileSystemId *string) *string {
 	var id *string
-	if fileSystemId == nil {
+	if fileSystemId == nil || len(*fileSystemId) == 0 {
 		uuid := uuid.TimeOrderedUUID()
 		fileSystemInput := &efs.CreateFileSystemInput{}
 		fileSystemInput.SetCreationToken(uuid)
-		fileSystemInput.SetPerformanceMode("generalPurpose")
+		fileSystemInput.SetPerformanceMode("generalPurpose") //"maxIO")
 		fileSystemDesc, error := svc.CreateFileSystem(fileSystemInput)
 		if error != nil {
 			banzaiUtils.LogErrorf(banzaiConstants.TagStatus, "Error creating FileSystem", error)
@@ -677,30 +690,52 @@ func getOrCreateEFSFileSystem(svc *efs.EFS, fileSystemId *string) *string {
 		state := fileSystemDesc.LifeCycleState
 		banzaiUtils.LogInfof(banzaiConstants.TagStatus, "FileSystem %v created, state = %v", *fileSystemId, *state)
 	} else {
-		fileSystemInput := &efs.DescribeFileSystemsInput{}
-		fileSystemInput.SetFileSystemId(*fileSystemId)
-		fileSystemsDesc, error := svc.DescribeFileSystems(fileSystemInput)
-		if len(fileSystemsDesc.FileSystems) != 1 {
-			return nil
-		}
-		fileSystemDesc := fileSystemsDesc.FileSystems[0]
-		id = fileSystemDesc.FileSystemId
-		state := fileSystemDesc.LifeCycleState
-		if error != nil {
-			banzaiUtils.LogErrorf(banzaiConstants.TagStatus, "Error describing FileSystem", error)
-			return nil
-		}
-		banzaiUtils.LogInfof(banzaiConstants.TagStatus, "FileSystem %v state = %v", *fileSystemId, *state)
+		id = fileSystemId
 	}
+
+	waitCounter := 0
+	state := getFileSystemState(svc, id)
+	if state == nil {
+		return nil
+	}
+
+	for ; (*state != "available") || waitCounter > 10; waitCounter++ {
+		banzaiUtils.LogInfof(banzaiConstants.TagStatus, "bef sleep")
+		time.Sleep(100 * time.Millisecond)
+		banzaiUtils.LogInfof(banzaiConstants.TagStatus, "after sleep")
+		state = getFileSystemState(svc, id)
+		banzaiUtils.LogInfof(banzaiConstants.TagStatus, "FileSystem state = %v", *state)
+	}
+
+	if *state != "available" {
+		return nil
+	}
+
 	return id
 }
 
-func createMountTargets(svc *efs.EFS, fileSystemId string, cluster *banzaiSimpleTypes.ClusterSimple) (*string, error) {
+func getFileSystemState(svc *efs.EFS, fileSystemId *string) *string {
+	fileSystemInput := &efs.DescribeFileSystemsInput{}
+	fileSystemInput.SetFileSystemId(*fileSystemId)
+	fileSystemsDesc, error := svc.DescribeFileSystems(fileSystemInput)
+	if len(fileSystemsDesc.FileSystems) != 1 {
+		return nil
+	}
+	fileSystemDesc := fileSystemsDesc.FileSystems[0]
+	state := fileSystemDesc.LifeCycleState
+	if error != nil {
+		banzaiUtils.LogErrorf(banzaiConstants.TagStatus, "Error describing FileSystem", error)
+		return nil
+	}
+	banzaiUtils.LogInfof(banzaiConstants.TagStatus, "FileSystem %v state = %v", *fileSystemId, *state)
+	return state
+}
 
+func retrieveAmazonSubnetAndSecurity(cluster *banzaiSimpleTypes.ClusterSimple) (string, string) {
 	amazonCluster, err := GetKubicornCluster(cluster)
 	if err != nil {
 		banzaiUtils.LogWarnf(banzaiConstants.TagGetCluster, "Error read cluster: %s", err)
-		return nil, err
+		return "", ""
 	}
 	banzaiUtils.LogInfof(banzaiConstants.TagStatus, "Amazon cluster name: ", amazonCluster.Name)
 
@@ -717,14 +752,18 @@ func createMountTargets(svc *efs.EFS, fileSystemId string, cluster *banzaiSimple
 			securityGroupId = firewall.Identifier
 		}
 	}
-
 	banzaiUtils.LogInfof(banzaiConstants.TagStatus, "Found SubnetId %v / SecurityGroupId %v", subnetId, securityGroupId)
+	return subnetId, securityGroupId
+}
 
+func createMountTargets(svc *efs.EFS, fileSystemId string, cluster *banzaiSimpleTypes.ClusterSimple) (*string, error) {
+
+	subnetId, securityGroupId := retrieveAmazonSubnetAndSecurity(cluster)
 	mountTargetId, error := retriveMountTarget(svc, subnetId, fileSystemId)
 	if error != nil {
 		return nil, error
 	}
-	if mountTargetId != nil {
+	if mountTargetId != nil && len(*mountTargetId) > 0 {
 		return mountTargetId, nil
 	}
 
@@ -760,4 +799,25 @@ func retriveMountTarget(svc *efs.EFS, subnetId string, fileSystemId string) (*st
 		}
 	}
 	return nil, nil
+}
+
+func deleteMountTargets(svc *efs.EFS, fileSystemId string, cluster *banzaiSimpleTypes.ClusterSimple) error {
+
+	subnetId, _ := retrieveAmazonSubnetAndSecurity(cluster)
+	mountTargetId, error := retriveMountTarget(svc, subnetId, fileSystemId)
+	if error != nil {
+		return error
+	}
+	if mountTargetId != nil && len(*mountTargetId) > 0 {
+		deleteMountTargetInput := efs.DeleteMountTargetInput{}
+		deleteMountTargetInput.MountTargetId = mountTargetId
+		deleteMountTargetOutput, error := svc.DeleteMountTarget(&deleteMountTargetInput)
+		if error != nil {
+			banzaiUtils.LogErrorf(banzaiConstants.TagStatus, "Error deleting mount target: %s, %s", *mountTargetId, error)
+			return error
+		}
+		banzaiUtils.LogInfof(banzaiConstants.TagStatus, "Mount target %s deleted: %s", *mountTargetId,
+			deleteMountTargetOutput.String())
+	}
+	return nil
 }
