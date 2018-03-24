@@ -68,7 +68,7 @@ imports:
   - database
   - vault
 - name: github.com/banzaicloud/banzai-types
-  version: ca12487c8b036a81f64279b989688d3e6dc8dc2b
+  version: 2770cb710cae08c6286efc57ae571ecbf370cd2b
   subpackages:
   - components
   - components/amazon
@@ -317,8 +317,8 @@ imports:
   version: 0f45f451971d2a84d8435d07a46df6ddaac3c8be
   subpackages:
   - pkg/local
-- name: github.com/kris-nova/kubicorn
-  version: e1f1eeb7fc078352a280b1415f716f8d76158f4e
+- name: github.com/kubicorn/kubicorn
+  version: ca4b3094a52bbbd97a78b4b6bc2bf01e6a5cf232
   repo: https://github.com/banzaicloud/kubicorn.git
   subpackages:
   - apis/cluster
@@ -338,20 +338,20 @@ imports:
   - cloud/packet/packetSDK
   - cloud/packet/public
   - cloud/packet/public/resources
-  - cutil
-  - cutil/agent
-  - cutil/compare
-  - cutil/defaults
-  - cutil/hang
-  - cutil/initapi
-  - cutil/kubeadm
-  - cutil/logger
-  - cutil/parser
-  - cutil/rand
-  - cutil/scp
-  - cutil/script
-  - cutil/signals
-  - cutil/uuid
+  - pkg
+  - pkg/agent
+  - pkg/compare
+  - pkg/defaults
+  - pkg/hang
+  - pkg/initapi
+  - pkg/kubeadm
+  - pkg/logger
+  - pkg/parser
+  - pkg/rand
+  - pkg/scp
+  - pkg/script
+  - pkg/signals
+  - pkg/uuid
   - state
   - state/fs
 - name: github.com/kris-nova/lolgopher
@@ -531,7 +531,7 @@ imports:
   - lex/httplex
   - trace
 - name: golang.org/x/oauth2
-  version: fdc9e635145ae97e6c2cb777c48305600cf515cb 
+  version: fdc9e635145ae97e6c2cb777c48305600cf515cb
   subpackages:
   - google
   - internal
